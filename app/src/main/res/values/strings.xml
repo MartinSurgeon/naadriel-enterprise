@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Naadriel Enterprise</string>
+    <string name="widget_name">Naadriel Farm Summary</string>
+    <string name="widget_description">Live summary of today\'s egg &amp; poultry sales, customer debt, and quick actions.</string>
+</resources>

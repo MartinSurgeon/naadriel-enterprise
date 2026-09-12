@@ -1,0 +1,7 @@
+{
+  "name": "Naadriel Enterprise",
+  "description": "Poultry and farm sales manager with SMSOnlineGH notifications, WhatsApp receipts, and customer debt tracking for eggs, live and dressed chicken.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
