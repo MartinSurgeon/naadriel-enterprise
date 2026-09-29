@@ -373,11 +373,11 @@ fun MainAppContent(
                             },
                             isCloudSyncing = isCloudSyncing,
                             cloudSyncStatusMsg = cloudSyncStatusMsg,
-                            onSyncToCloud = { callback ->
-                                viewModel.syncToCloud(callback)
+                            onSyncToCloud = { url, key, callback ->
+                                viewModel.syncToCloud(url, key, callback)
                             },
-                            onRestoreFromCloud = { callback ->
-                                viewModel.restoreFromCloud(callback)
+                            onRestoreFromCloud = { url, key, callback ->
+                                viewModel.restoreFromCloud(url, key, callback)
                             },
                             onTestCloudConnection = { url, key, callback ->
                                 viewModel.testCloudConnection(url, key, callback)

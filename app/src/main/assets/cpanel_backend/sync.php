@@ -1,6 +1,6 @@
 <?php
 /**
- * Naadriel Enterprise Farm - Namecheap cPanel MySQL Cloud Sync API
+ * BizTrack POS & Business Manager - Namecheap cPanel MySQL Cloud Sync API
  * 
  * Instructions:
  * 1. Log into your Namecheap cPanel.
@@ -68,7 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     echo json_encode([
         'status'          => 'success',
-        'message'         => 'Naadriel Farm Sync API is online and healthy.',
+        'message'         => 'BizTrack Sync API is online and healthy.',
         'serverTimestamp' => round(microtime(true) * 1000)
     ]);
     exit;
@@ -90,7 +90,7 @@ if (!empty($API_SECRET_KEY) && $providedKey !== $API_SECRET_KEY) {
     exit;
 }
 
-$action = $_SERVER['HTTP_X_SYNC_ACTION'] ?? ($data['backupData'] ? 'PUSH' : 'PULL');
+$action = $data['action'] ?? $_SERVER['HTTP_X_SYNC_ACTION'] ?? (isset($data['backupData']) ? 'PUSH' : 'PULL');
 
 // ----------------------------------------------------
 // PULL: Return all MySQL records to Android phone
@@ -104,60 +104,133 @@ if (strtoupper($action) === 'PULL') {
         $inventoryLogs = $pdo->query("SELECT * FROM inventory_logs ORDER BY id ASC")->fetchAll();
         $settingsRow   = $pdo->query("SELECT * FROM app_settings WHERE id = 1 LIMIT 1")->fetch();
 
-        // Cast numeric fields
-        foreach ($products as &$p) {
-            $p['id']             = (int)$p['id'];
-            $p['price']          = (float)$p['price'];
-            $p['costPrice']      = (float)$p['costPrice'];
-            $p['stockQuantity']  = (float)$p['stockQuantity'];
-            $p['minStockThreshold'] = (float)$p['minStockThreshold'];
-            $p['lastRestockedAt']= (int)$p['lastRestockedAt'];
-        }
-        foreach ($customers as &$c) {
-            $c['id']             = (int)$c['id'];
-            $c['totalDebt']      = (float)$c['totalDebt'];
-            $c['totalPurchased'] = (float)$c['totalPurchased'];
-            $c['totalPaid']      = (float)$c['totalPaid'];
-            $c['lastTransactionDate'] = (int)$c['lastTransactionDate'];
-        }
-        foreach ($salesOrders as &$s) {
-            $s['id']             = (int)$s['id'];
-            $s['customerId']     = $s['customerId'] !== null ? (int)$s['customerId'] : null;
-            $s['totalAmount']    = (float)$s['totalAmount'];
-            $s['amountPaid']     = (float)$s['amountPaid'];
-            $s['debtAmount']     = (float)$s['debtAmount'];
-            $s['discountAmount'] = (float)$s['discountAmount'];
-            $s['timestamp']      = (int)$s['timestamp'];
-            $s['lastSmsTimestamp']= $s['lastSmsTimestamp'] !== null ? (int)$s['lastSmsTimestamp'] : null;
-        }
-        foreach ($payments as &$pm) {
-            $pm['id']            = (int)$pm['id'];
-            $pm['customerId']    = (int)$pm['customerId'];
-            $pm['saleOrderId']   = $pm['saleOrderId'] !== null ? (int)$pm['saleOrderId'] : null;
-            $pm['amount']        = (float)$pm['amount'];
-            $pm['timestamp']     = (int)$pm['timestamp'];
-            $pm['balanceAfterPayment'] = (float)$pm['balanceAfterPayment'];
-        }
-        foreach ($inventoryLogs as &$l) {
-            $l['id']              = (int)$l['id'];
-            $l['productId']       = (int)$l['productId'];
-            $l['quantityChanged'] = (float)$l['quantityChanged'];
-            $l['quantityAfter']   = (float)$l['quantityAfter'];
-            $l['timestamp']       = (int)$l['timestamp'];
+        // Cast numeric fields and map to Android entity names
+        $formattedProducts = [];
+        foreach ($products as $p) {
+            $formattedProducts[] = [
+                'id'                => (int)$p['id'],
+                'name'              => (string)($p['name'] ?? 'Product'),
+                'category'          => (string)($p['category'] ?? 'OTHER'),
+                'unit'              => (string)($p['unit'] ?? 'unit'),
+                'unitPrice'         => (float)($p['unitPrice'] ?? $p['price'] ?? 0.0),
+                'costPrice'         => (float)($p['costPrice'] ?? 0.0),
+                'stockQuantity'     => (float)($p['stockQuantity'] ?? 0.0),
+                'minStockThreshold' => (float)($p['minStockThreshold'] ?? 5.0),
+                'inStock'           => (bool)(((float)($p['stockQuantity'] ?? 0.0)) > 0),
+                'description'       => (string)($p['description'] ?? ''),
+                'imageUri'          => (string)($p['imageUri'] ?? ''),
+                'lastRestockedAt'   => (int)($p['lastRestockedAt'] ?? round(microtime(true) * 1000))
+            ];
         }
 
-        $appSettings = $settingsRow ?: [
-            'id' => 1,
-            'businessName' => 'Naadriel Enterprise',
-            'businessTagline' => 'Chicken at its best',
-            'businessPhone' => '024 000 0000',
-            'businessLocation' => 'Ghana',
-            'momoPaymentDetails' => 'MTN MoMo: 0244XXXXXX (Naadriel Enterprise)',
-            'smsApiKey' => '',
-            'smsSenderId' => 'Naadriel',
-            'smsAutoSendOnSale' => true,
-            'smsAutoSendOnPayment' => true,
-            'currencySymbol' => 'GH₵'
+        $formattedCustomers = [];
+        foreach ($customers as $c) {
+            $debt = 0.0;
+            if (isset($c['currentBalance']) && (float)$c['currentBalance'] > 0.001) {
+                $debt = (float)$c['currentBalance'];
+            } elseif (isset($c['totalDebt']) && (float)$c['totalDebt'] > 0.001) {
+                $debt = (float)$c['totalDebt'];
+            } elseif (isset($c['currentBalance'])) {
+                $debt = (float)$c['currentBalance'];
+            } else {
+                $debt = (float)($c['totalDebt'] ?? 0.0);
+            }
+
+            $purchases = 0.0;
+            if (isset($c['totalPurchases']) && (float)$c['totalPurchases'] > 0.001) {
+                $purchases = (float)$c['totalPurchases'];
+            } elseif (isset($c['totalPurchased']) && (float)$c['totalPurchased'] > 0.001) {
+                $purchases = (float)$c['totalPurchased'];
+            } elseif (isset($c['totalPurchases'])) {
+                $purchases = (float)$c['totalPurchases'];
+            } else {
+                $purchases = (float)($c['totalPurchased'] ?? 0.0);
+            }
+
+            $formattedCustomers[] = [
+                'id'             => (int)$c['id'],
+                'name'           => (string)($c['name'] ?? 'Customer'),
+                'phone'          => (string)($c['phone'] ?? ''),
+                'whatsapp'       => (string)($c['whatsapp'] ?? ''),
+                'address'        => (string)($c['address'] ?? ''),
+                'notes'          => (string)($c['notes'] ?? ''),
+                'totalPurchases' => $purchases,
+                'totalPaid'      => (float)($c['totalPaid'] ?? 0.0),
+                'currentBalance' => $debt,
+                'createdAt'      => (int)($c['createdAt'] ?? $c['lastTransactionDate'] ?? round(microtime(true) * 1000))
+            ];
+        }
+
+        $formattedSalesOrders = [];
+        foreach ($salesOrders as $s) {
+            $formattedSalesOrders[] = [
+                'id'               => (int)$s['id'],
+                'invoiceNumber'    => (string)($s['invoiceNumber'] ?? ('INV-' . $s['id'])),
+                'customerId'       => (int)($s['customerId'] ?? 0),
+                'customerName'     => (string)($s['customerName'] ?? 'Walk-in Customer'),
+                'customerPhone'    => (string)($s['customerPhone'] ?? ''),
+                'customerWhatsapp' => (string)($s['customerWhatsapp'] ?? ''),
+                'itemsJson'        => (string)($s['itemsJson'] ?? '[]'),
+                'totalAmount'      => (float)($s['totalAmount'] ?? 0.0),
+                'discountAmount'   => (float)($s['discountAmount'] ?? 0.0),
+                'amountPaid'       => (float)($s['amountPaid'] ?? 0.0),
+                'balanceDue'       => (float)($s['balanceDue'] ?? $s['debtAmount'] ?? 0.0),
+                'paymentStatus'    => (string)($s['paymentStatus'] ?? 'PAID'),
+                'paymentMethod'    => (string)($s['paymentMethod'] ?? 'CASH'),
+                'notes'            => (string)($s['notes'] ?? ''),
+                'timestamp'        => (int)($s['timestamp'] ?? round(microtime(true) * 1000)),
+                'smsSentCount'     => (int)($s['smsSentCount'] ?? 0),
+                'lastSmsTimestamp' => ($s['lastSmsTimestamp'] !== null && $s['lastSmsTimestamp'] > 0) ? (int)$s['lastSmsTimestamp'] : null
+            ];
+        }
+
+        $formattedPayments = [];
+        foreach ($payments as $pm) {
+            $formattedPayments[] = [
+                'id'                  => (int)$pm['id'],
+                'customerId'          => (int)($pm['customerId'] ?? 0),
+                'customerName'        => (string)($pm['customerName'] ?? ''),
+                'saleOrderId'         => ($pm['saleOrderId'] !== null && $pm['saleOrderId'] > 0) ? (int)$pm['saleOrderId'] : null,
+                'amount'              => (float)($pm['amount'] ?? 0.0),
+                'paymentMethod'       => (string)($pm['paymentMethod'] ?? 'CASH'),
+                'notes'               => (string)($pm['notes'] ?? ''),
+                'timestamp'           => (int)($pm['timestamp'] ?? round(microtime(true) * 1000)),
+                'balanceAfterPayment' => (float)($pm['balanceAfterPayment'] ?? 0.0)
+            ];
+        }
+
+        $formattedLogs = [];
+        foreach ($inventoryLogs as $l) {
+            $formattedLogs[] = [
+                'id'              => (int)$l['id'],
+                'productId'       => (int)($l['productId'] ?? 0),
+                'productName'     => (string)($l['productName'] ?? ''),
+                'changeType'      => (string)($l['changeType'] ?? 'ADJUSTMENT'),
+                'quantityChanged' => (float)($l['quantityChanged'] ?? 0.0),
+                'quantityAfter'   => (float)($l['quantityAfter'] ?? 0.0),
+                'unit'            => (string)($l['unit'] ?? 'unit'),
+                'notes'           => (string)($l['notes'] ?? ''),
+                'timestamp'       => (int)($l['timestamp'] ?? round(microtime(true) * 1000))
+            ];
+        }
+
+        $appSettings = [
+            'id'                  => 1,
+            'businessName'        => (string)($settingsRow['businessName'] ?? 'BizTrack Business'),
+            'businessTagline'     => (string)($settingsRow['businessTagline'] ?? 'Quality products & reliable service'),
+            'businessPhone'       => (string)($settingsRow['businessPhone'] ?? '024 000 0000'),
+            'businessLocation'    => (string)($settingsRow['businessLocation'] ?? 'Ghana'),
+            'momoPaymentDetails'  => (string)($settingsRow['momoPaymentDetails'] ?? 'MTN MoMo: 0244XXXXXX (BizTrack)'),
+            'smsApiKey'           => (string)($settingsRow['smsApiKey'] ?? ''),
+            'smsSenderId'         => (string)($settingsRow['smsSenderId'] ?? 'BizTrack'),
+            'smsAutoSendOnSale'   => isset($settingsRow['smsAutoSendOnSale']) ? (bool)$settingsRow['smsAutoSendOnSale'] : true,
+            'smsAutoSendOnPayment'=> isset($settingsRow['smsAutoSendOnPayment']) ? (bool)$settingsRow['smsAutoSendOnPayment'] : true,
+            'currencySymbol'      => (string)($settingsRow['currencySymbol'] ?? 'GH₵'),
+            'cloudSyncUrl'        => (string)($settingsRow['cloudSyncUrl'] ?? ''),
+            'cloudSyncSecretKey'  => (string)($settingsRow['cloudSyncSecretKey'] ?? ''),
+            'cloudAutoSyncOnSale' => isset($settingsRow['cloudAutoSyncOnSale']) ? (bool)$settingsRow['cloudAutoSyncOnSale'] : false,
+            'lastCloudSyncTime'   => (int)($settingsRow['lastCloudSyncTime'] ?? 0),
+            'lastCloudSyncStatus' => (string)($settingsRow['lastCloudSyncStatus'] ?? 'Synced')
         ];
 
         echo json_encode([
@@ -165,21 +238,25 @@ if (strtoupper($action) === 'PULL') {
             'message'         => 'Cloud database records successfully fetched.',
             'serverTimestamp' => round(microtime(true) * 1000),
             'backupData'      => [
-                'version'       => 2,
+                'formatVersion' => 1,
+                'appName'       => 'BizTrack POS',
                 'exportedAt'    => round(microtime(true) * 1000),
-                'deviceModel'   => 'Namecheap MySQL Server',
-                'products'      => $products,
-                'customers'     => $customers,
-                'salesOrders'   => $salesOrders,
-                'payments'      => $payments,
-                'inventoryLogs' => $inventoryLogs,
+                'exportedAtFormatted' => date('d M Y, h:i A'),
+                'businessName'  => $appSettings['businessName'],
+                'products'      => $formattedProducts,
+                'customers'     => $formattedCustomers,
+                'salesOrders'   => $formattedSalesOrders,
+                'payments'      => $formattedPayments,
+                'inventoryLogs' => $formattedLogs,
                 'settings'      => $appSettings,
                 'summary'       => [
-                    'totalProducts'      => count($products),
-                    'totalCustomers'     => count($customers),
-                    'totalSalesOrders'   => count($salesOrders),
-                    'totalPayments'      => count($payments),
-                    'totalInventoryLogs' => count($inventoryLogs)
+                    'totalProducts'          => count($formattedProducts),
+                    'totalCustomers'         => count($formattedCustomers),
+                    'totalSalesOrders'       => count($formattedSalesOrders),
+                    'totalPayments'          => count($formattedPayments),
+                    'totalInventoryLogs'     => count($formattedLogs),
+                    'totalOutstandingDebt'   => array_sum(array_column($formattedCustomers, 'currentBalance')),
+                    'totalRevenue'           => array_sum(array_column($formattedSalesOrders, 'totalAmount'))
                 ]
             ]
         ]);
@@ -224,7 +301,7 @@ try {
                 ':id'                => $p['id'],
                 ':name'              => $p['name'],
                 ':category'          => $p['category'] ?? 'OTHER',
-                ':price'             => $p['price'] ?? 0.0,
+                ':price'             => $p['unitPrice'] ?? $p['price'] ?? 0.0,
                 ':costPrice'         => $p['costPrice'] ?? 0.0,
                 ':stockQuantity'     => $p['stockQuantity'] ?? 0.0,
                 ':unit'              => $p['unit'] ?? 'unit',
@@ -258,10 +335,10 @@ try {
                 ':whatsapp'            => $c['whatsapp'] ?? '',
                 ':address'             => $c['address'] ?? '',
                 ':notes'               => $c['notes'] ?? '',
-                ':totalDebt'           => $c['totalDebt'] ?? 0.0,
-                ':totalPurchased'      => $c['totalPurchased'] ?? 0.0,
+                ':totalDebt'           => $c['currentBalance'] ?? $c['totalDebt'] ?? 0.0,
+                ':totalPurchased'      => $c['totalPurchases'] ?? $c['totalPurchased'] ?? 0.0,
                 ':totalPaid'           => $c['totalPaid'] ?? 0.0,
-                ':lastTransactionDate' => $c['lastTransactionDate'] ?? round(microtime(true) * 1000)
+                ':lastTransactionDate' => $c['createdAt'] ?? $c['lastTransactionDate'] ?? round(microtime(true) * 1000)
             ]);
         }
     }
@@ -291,10 +368,10 @@ try {
                 ':customerName'     => $s['customerName'],
                 ':customerPhone'    => $s['customerPhone'] ?? '',
                 ':itemsJson'        => $s['itemsJson'],
-                ':totalAmount'      => $s['totalAmount'] ?? 0.0,
-                ':amountPaid'       => $s['amountPaid'] ?? 0.0,
-                ':debtAmount'       => $s['debtAmount'] ?? 0.0,
-                ':discountAmount'   => $s['discountAmount'] ?? 0.0,
+                ':totalAmount'      => (float)($s['totalAmount'] ?? 0.0),
+                ':amountPaid'       => (float)($s['amountPaid'] ?? 0.0),
+                ':debtAmount'       => (float)($s['balanceDue'] ?? $s['debtAmount'] ?? 0.0),
+                ':discountAmount'   => (float)($s['discountAmount'] ?? 0.0),
                 ':paymentStatus'    => $s['paymentStatus'] ?? 'PAID',
                 ':paymentMethod'    => $s['paymentMethod'] ?? 'CASH',
                 ':notes'            => $s['notes'] ?? '',
@@ -374,13 +451,13 @@ try {
                 currencySymbol = VALUES(currencySymbol)
         ");
         $stmt->execute([
-            ':businessName'        => $st['businessName'] ?? 'Naadriel Enterprise',
+            ':businessName'        => $st['businessName'] ?? 'BizTrack Business',
             ':businessTagline'     => $st['businessTagline'] ?? '',
             ':businessPhone'       => $st['businessPhone'] ?? '',
             ':businessLocation'    => $st['businessLocation'] ?? '',
             ':momoPaymentDetails'  => $st['momoPaymentDetails'] ?? '',
             ':smsApiKey'           => $st['smsApiKey'] ?? '',
-            ':smsSenderId'         => $st['smsSenderId'] ?? 'Naadriel',
+            ':smsSenderId'         => $st['smsSenderId'] ?? 'BizTrack',
             ':currencySymbol'      => $st['currencySymbol'] ?? 'GH₵'
         ]);
     }

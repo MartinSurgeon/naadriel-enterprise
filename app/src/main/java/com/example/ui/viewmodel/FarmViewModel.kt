@@ -32,32 +32,16 @@ data class SmsPreviewState(
 
 class FarmViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository: FarmRepository
-
     private val db = AppDatabase.getDatabase(application)
 
-    init {
-        repository = FarmRepository(
-            productDao = db.productDao(),
-            customerDao = db.customerDao(),
-            saleOrderDao = db.saleOrderDao(),
-            paymentDao = db.paymentDao(),
-            appSettingsDao = db.appSettingsDao(),
-            inventoryLogDao = db.inventoryLogDao()
-        )
-
-        // Schedule periodic 24-hour WorkManager auto-backup
-        try {
-            BackupWorkScheduler.schedulePeriodicBackup(application)
-        } catch (e: Exception) {
-            android.util.Log.e("FarmViewModel", "Failed to schedule periodic backup", e)
-        }
-        try {
-            loadBackupInfo()
-        } catch (e: Exception) {
-            android.util.Log.e("FarmViewModel", "Failed to load backup info", e)
-        }
-    }
+    private val repository = FarmRepository(
+        productDao = db.productDao(),
+        customerDao = db.customerDao(),
+        saleOrderDao = db.saleOrderDao(),
+        paymentDao = db.paymentDao(),
+        appSettingsDao = db.appSettingsDao(),
+        inventoryLogDao = db.inventoryLogDao()
+    )
 
     // Backup & Restore State Flows
     private val _lastBackupTime = MutableStateFlow(0L)
@@ -153,6 +137,20 @@ class FarmViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isSendingSms = MutableStateFlow(false)
     val isSendingSms: StateFlow<Boolean> = _isSendingSms.asStateFlow()
+
+    init {
+        // Schedule periodic 24-hour WorkManager auto-backup
+        try {
+            BackupWorkScheduler.schedulePeriodicBackup(application)
+        } catch (e: Exception) {
+            android.util.Log.e("FarmViewModel", "Failed to schedule periodic backup", e)
+        }
+        try {
+            loadBackupInfo()
+        } catch (e: Exception) {
+            android.util.Log.e("FarmViewModel", "Failed to load backup info", e)
+        }
+    }
 
     fun updateCartItemQuantity(product: ProductEntity, delta: Double) {
         val current = _cart.value.toMutableMap()
@@ -892,14 +890,18 @@ class FarmViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Push all local Room data to Namecheap MySQL database.
      */
-    fun syncToCloud(onResult: (CloudSyncResult) -> Unit) {
+    fun syncToCloud(
+        customUrl: String? = null,
+        customKey: String? = null,
+        onResult: (CloudSyncResult) -> Unit
+    ) {
         viewModelScope.launch {
             _isCloudSyncing.value = true
             _cloudSyncStatusMessage.value = "Preparing cloud sync payload..."
             try {
                 val currentSettings = settings.value
-                val syncUrl = currentSettings.cloudSyncUrl.trim()
-                val secretKey = currentSettings.cloudSyncSecretKey.trim()
+                val syncUrl = (customUrl ?: currentSettings.cloudSyncUrl).trim()
+                val secretKey = (customKey ?: currentSettings.cloudSyncSecretKey).trim()
 
                 if (syncUrl.isBlank()) {
                     val failRes = CloudSyncResult(
@@ -911,6 +913,16 @@ class FarmViewModel(application: Application) : AndroidViewModel(application) {
                     _statusMessage.emit(failRes.message)
                     onResult(failRes)
                     return@launch
+                }
+
+                // Auto-persist active cloud credentials if they changed
+                if (syncUrl != currentSettings.cloudSyncUrl || secretKey != currentSettings.cloudSyncSecretKey) {
+                    repository.saveSettings(
+                        currentSettings.copy(
+                            cloudSyncUrl = syncUrl,
+                            cloudSyncSecretKey = secretKey
+                        )
+                    )
                 }
 
                 // 1. Gather all current Room records
@@ -930,6 +942,8 @@ class FarmViewModel(application: Application) : AndroidViewModel(application) {
                     val now = System.currentTimeMillis()
                     repository.saveSettings(
                         currentSettings.copy(
+                            cloudSyncUrl = syncUrl,
+                            cloudSyncSecretKey = secretKey,
                             lastCloudSyncTime = now,
                             lastCloudSyncStatus = "Synced ${syncResult.recordsCount} records"
                         )
@@ -955,14 +969,18 @@ class FarmViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Pull all records from Namecheap MySQL database and restore to local Room.
      */
-    fun restoreFromCloud(onResult: (RestoreResult) -> Unit) {
+    fun restoreFromCloud(
+        customUrl: String? = null,
+        customKey: String? = null,
+        onResult: (RestoreResult) -> Unit
+    ) {
         viewModelScope.launch {
             _isCloudSyncing.value = true
             _cloudSyncStatusMessage.value = "Connecting to Namecheap MySQL server..."
             try {
                 val currentSettings = settings.value
-                val syncUrl = currentSettings.cloudSyncUrl.trim()
-                val secretKey = currentSettings.cloudSyncSecretKey.trim()
+                val syncUrl = (customUrl ?: currentSettings.cloudSyncUrl).trim()
+                val secretKey = (customKey ?: currentSettings.cloudSyncSecretKey).trim()
 
                 if (syncUrl.isBlank()) {
                     val failRes = RestoreResult(
@@ -974,6 +992,16 @@ class FarmViewModel(application: Application) : AndroidViewModel(application) {
                     _statusMessage.emit(failRes.message)
                     onResult(failRes)
                     return@launch
+                }
+
+                // Auto-persist active cloud credentials if they changed
+                if (syncUrl != currentSettings.cloudSyncUrl || secretKey != currentSettings.cloudSyncSecretKey) {
+                    repository.saveSettings(
+                        currentSettings.copy(
+                            cloudSyncUrl = syncUrl,
+                            cloudSyncSecretKey = secretKey
+                        )
+                    )
                 }
 
                 val pullResult = CloudSyncService.pullFromCloud(
@@ -1001,6 +1029,8 @@ class FarmViewModel(application: Application) : AndroidViewModel(application) {
                     val now = System.currentTimeMillis()
                     repository.saveSettings(
                         currentSettings.copy(
+                            cloudSyncUrl = syncUrl,
+                            cloudSyncSecretKey = secretKey,
                             lastCloudSyncTime = now,
                             lastCloudSyncStatus = "Restored from cloud (${pullResult.recordsCount} records)"
                         )

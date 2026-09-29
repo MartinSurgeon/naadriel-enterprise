@@ -113,7 +113,7 @@ class FarmWidgetProvider : AppWidgetProvider() {
                     val db = AppDatabase.getDatabase(context)
                     val settings = db.appSettingsDao().getSettingsDirect()
                     val currencySymbol = settings?.currencySymbol ?: "GH₵"
-                    val businessName = settings?.businessName?.ifBlank { "Naadriel Enterprise" } ?: "Naadriel Enterprise"
+                    val businessName = settings?.businessName?.ifBlank { "BizTrack Business" } ?: "BizTrack Business"
 
                     // Calculate Start of Today timestamp
                     val cal = Calendar.getInstance().apply {

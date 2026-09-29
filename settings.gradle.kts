@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Naadriel Enterprise"
+rootProject.name = "BizTrack"
 
 include(":app")

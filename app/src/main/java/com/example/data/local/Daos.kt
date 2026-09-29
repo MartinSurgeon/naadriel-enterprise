@@ -48,10 +48,20 @@ interface CustomerDao {
     @Query("SELECT * FROM customers ORDER BY name ASC")
     suspend fun getAllCustomersDirect(): List<CustomerEntity>
 
-    @Query("SELECT * FROM customers WHERE currentBalance > 0 ORDER BY currentBalance DESC")
+    @Query("""
+        SELECT DISTINCT c.* FROM customers c
+        WHERE c.currentBalance > 0.009 
+           OR c.id IN (SELECT DISTINCT customerId FROM sales_orders WHERE balanceDue > 0.009)
+        ORDER BY c.currentBalance DESC, c.name ASC
+    """)
     fun getDebtors(): Flow<List<CustomerEntity>>
 
-    @Query("SELECT * FROM customers WHERE currentBalance > 0")
+    @Query("""
+        SELECT DISTINCT c.* FROM customers c
+        WHERE c.currentBalance > 0.009 
+           OR c.id IN (SELECT DISTINCT customerId FROM sales_orders WHERE balanceDue > 0.009)
+        ORDER BY c.currentBalance DESC, c.name ASC
+    """)
     suspend fun getDebtorsDirect(): List<CustomerEntity>
 
     @Query("SELECT * FROM customers WHERE id = :id")

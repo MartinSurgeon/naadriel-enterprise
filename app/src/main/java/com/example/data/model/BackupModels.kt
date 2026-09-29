@@ -5,10 +5,10 @@ import com.squareup.moshi.JsonClass
 @JsonClass(generateAdapter = true)
 data class BackupData(
     val formatVersion: Int = 1,
-    val appName: String = "Naadriel Enterprise Farm POS",
+    val appName: String = "BizTrack POS",
     val exportedAt: Long = System.currentTimeMillis(),
     val exportedAtFormatted: String = "",
-    val businessName: String = "Naadriel Enterprise",
+    val businessName: String = "BizTrack Business",
     val settings: AppSettingsEntity? = null,
     val products: List<ProductEntity> = emptyList(),
     val customers: List<CustomerEntity> = emptyList(),

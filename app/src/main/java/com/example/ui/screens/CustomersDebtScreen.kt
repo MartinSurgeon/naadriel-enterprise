@@ -208,7 +208,7 @@ fun CustomersDebtScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (selectedTab == 0) "All customers have cleared their balances with Naadriel Enterprise." else "Add customers using the '+' button or when recording sales.",
+                                text = if (selectedTab == 0) "All customers have cleared their balances with your business." else "Add customers using the '+' button or when recording sales.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -344,11 +344,13 @@ fun CustomerDebtCard(
     onViewReceipt: ((SaleOrderEntity) -> Unit)? = null,
     onShareWhatsAppStatement: () -> Unit
 ) {
-    val owesMoney = customer.currentBalance > 0
+    val unpaidOrders = remember(orders) { orders.filter { it.balanceDue > 0.0 }.sortedBy { it.timestamp } }
+    val unpaidDebtSum = remember(unpaidOrders) { unpaidOrders.sumOf { it.balanceDue } }
+    val displayDebt = maxOf(customer.currentBalance, unpaidDebtSum)
+    val owesMoney = displayDebt > 0.009
     var isExpandedInline by remember { mutableStateOf(false) }
 
     val paidOrders = remember(orders) { orders.filter { it.balanceDue <= 0.0 } }
-    val unpaidOrders = remember(orders) { orders.filter { it.balanceDue > 0.0 }.sortedBy { it.timestamp } }
     val customerPayments = remember(payments, customer.id) {
         payments.filter { it.customerId == customer.id }.sortedByDescending { it.timestamp }
     }
@@ -413,7 +415,7 @@ fun CustomerDebtCard(
                             color = if (owesMoney) DebtRed else FarmGreen
                         )
                         Text(
-                            text = Formatters.formatCurrency(customer.currentBalance, settings.currencySymbol),
+                            text = Formatters.formatCurrency(displayDebt, settings.currencySymbol),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold,
                             color = if (owesMoney) DebtRed else FarmGreen

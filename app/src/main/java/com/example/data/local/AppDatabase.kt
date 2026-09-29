@@ -267,13 +267,13 @@ abstract class AppDatabase : RoomDatabase() {
                 settingsDao.saveSettings(
                     AppSettingsEntity(
                         id = 1,
-                        businessName = "Naadriel Enterprise",
-                        businessTagline = "Chicken at its best",
+                        businessName = "BizTrack Business",
+                        businessTagline = "Quality products & reliable service",
                         businessPhone = "024 000 0000",
                         businessLocation = "Accra, Ghana",
-                        momoPaymentDetails = "MTN MoMo: 0244XXXXXX (Naadriel Enterprise)",
+                        momoPaymentDetails = "MTN MoMo: 0244XXXXXX (BizTrack)",
                         smsApiKey = "",
-                        smsSenderId = "Naadriel",
+                        smsSenderId = "BizTrack",
                         smsAutoSendOnSale = true,
                         smsAutoSendOnPayment = true,
                         currencySymbol = "GH₵"

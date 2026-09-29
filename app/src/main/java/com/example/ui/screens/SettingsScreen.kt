@@ -80,8 +80,8 @@ fun SettingsScreen(
     // Cloud Sync parameters
     isCloudSyncing: Boolean = false,
     cloudSyncStatusMsg: String? = null,
-    onSyncToCloud: (((CloudSyncResult) -> Unit) -> Unit)? = null,
-    onRestoreFromCloud: (((RestoreResult) -> Unit) -> Unit)? = null,
+    onSyncToCloud: ((url: String, key: String, (CloudSyncResult) -> Unit) -> Unit)? = null,
+    onRestoreFromCloud: ((url: String, key: String, (RestoreResult) -> Unit) -> Unit)? = null,
     onTestCloudConnection: ((url: String, key: String, (CloudSyncResult) -> Unit) -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -384,7 +384,7 @@ fun SettingsScreen(
                                     }
                                 },
                                 onSyncToCloud = {
-                                    onSyncToCloud?.invoke { res ->
+                                    onSyncToCloud?.invoke(cloudSyncUrl.trim(), cloudSyncSecretKey.trim()) { res ->
                                         Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
                                     }
                                 },
@@ -652,7 +652,7 @@ fun SettingsScreen(
                 Button(
                     onClick = {
                         showConfirmCloudRestoreDialog = false
-                        onRestoreFromCloud?.invoke { result ->
+                        onRestoreFromCloud?.invoke(cloudSyncUrl.trim(), cloudSyncSecretKey.trim()) { result ->
                             Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                         }
                     },
@@ -785,7 +785,7 @@ private fun ProfileTabContent(
                 value = businessName,
                 onValueChange = onBusinessNameChange,
                 label = { Text("Business Name") },
-                placeholder = { Text("e.g. Naadriel Enterprise") },
+                placeholder = { Text("e.g. BizTrack Store") },
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Business, contentDescription = null) },
                 modifier = Modifier.fillMaxWidth(),
@@ -834,7 +834,7 @@ private fun ProfileTabContent(
                 value = momoPaymentDetails,
                 onValueChange = onMomoPaymentDetailsChange,
                 label = { Text("Mobile Money / Payment Instructions") },
-                placeholder = { Text("e.g. MTN MoMo: 0244XXXXXX (Naadriel Enterprise)") },
+                placeholder = { Text("e.g. MTN MoMo: 0244XXXXXX (BizTrack Store)") },
                 supportingText = { Text("Included automatically in customer receipts & debt reminders") },
                 singleLine = false,
                 maxLines = 3,
@@ -1481,7 +1481,7 @@ private fun SmsTabContent(
                 value = smsSenderId,
                 onValueChange = onSmsSenderIdChange,
                 label = { Text("Sender ID (Max 11 characters)") },
-                placeholder = { Text("Naadriel") },
+                placeholder = { Text("BizTrack") },
                 singleLine = true,
                 supportingText = { Text("${smsSenderId.length}/11 chars • Must match approved sender name on SMSOnlineGH") },
                 modifier = Modifier

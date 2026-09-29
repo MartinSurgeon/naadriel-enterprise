@@ -93,7 +93,7 @@ object SmsService {
             return@withContext SmsSendResult.Failure("Invalid recipient phone number: $recipientPhone", canFallbackToNative = false)
         }
 
-        val effectiveSender = if (senderId.isNotBlank()) senderId.trim().take(11) else "Naadriel"
+        val effectiveSender = if (senderId.isNotBlank()) senderId.trim().take(11) else "BizTrack"
 
         try {
             // Build JSON payload

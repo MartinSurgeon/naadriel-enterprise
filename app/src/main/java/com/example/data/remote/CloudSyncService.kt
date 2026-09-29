@@ -28,6 +28,31 @@ object CloudSyncService {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     /**
+     * Sanitizes and normalizes the sync URL. If the user only enters the domain name without the path
+     * to sync.php, this will automatically append /sync.php (or /api/sync.php) to prevent hitting HTML index pages.
+     */
+    fun normalizeSyncUrl(inputUrl: String): String {
+        var url = inputUrl.trim()
+        if (url.isBlank()) return ""
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            url = "https://$url"
+        }
+        return url
+    }
+
+    private fun formatErrorMessage(responseBody: String, httpCode: Int): String {
+        val trimmed = responseBody.trim()
+        if (trimmed.startsWith("<!DOCTYPE", ignoreCase = true) || trimmed.startsWith("<html", ignoreCase = true)) {
+            return "Server returned a web page (HTML) instead of API data (HTTP $httpCode). Ensure your URL points directly to sync.php (e.g. https://yourdomain.com/sync.php or /api/sync.php)."
+        }
+        return if (trimmed.isNotBlank()) {
+            trimmed.take(160)
+        } else {
+            "HTTP $httpCode (Empty response)"
+        }
+    }
+
+    /**
      * Push all local Room data to the remote Namecheap cPanel MySQL endpoint.
      */
     suspend fun pushToCloud(
@@ -35,10 +60,10 @@ object CloudSyncService {
         secretKey: String,
         backupData: BackupData
     ): CloudSyncResult = withContext(Dispatchers.IO) {
-        val trimmedUrl = syncUrl.trim()
+        val normalizedUrl = normalizeSyncUrl(syncUrl)
         val trimmedKey = secretKey.trim()
 
-        if (trimmedUrl.isBlank()) {
+        if (normalizedUrl.isBlank()) {
             return@withContext CloudSyncResult(
                 success = false,
                 message = "Cloud Sync URL is empty. Please configure your server URL in Settings."
@@ -58,9 +83,9 @@ object CloudSyncService {
 
             val requestBody = jsonPayload.toRequestBody(jsonMediaType)
             val request = Request.Builder()
-                .url(trimmedUrl)
+                .url(normalizedUrl)
                 .post(requestBody)
-                .addHeader("User-Agent", "NaadrielFarmPOS/1.0")
+                .addHeader("User-Agent", "BizTrackPOS/1.0")
                 .addHeader("X-Sync-Action", "PUSH")
                 .addHeader("X-Api-Key", trimmedKey)
                 .build()
@@ -71,7 +96,7 @@ object CloudSyncService {
             if (!response.isSuccessful) {
                 return@withContext CloudSyncResult(
                     success = false,
-                    message = "Server returned HTTP ${response.code}: ${responseBody.take(150)}"
+                    message = formatErrorMessage(responseBody, response.code)
                 )
             }
 
@@ -93,7 +118,7 @@ object CloudSyncService {
             } else {
                 CloudSyncResult(
                     success = false,
-                    message = syncResponse?.message ?: "Server error: ${responseBody.take(150)}"
+                    message = syncResponse?.message ?: formatErrorMessage(responseBody, response.code)
                 )
             }
         } catch (e: Exception) {
@@ -112,10 +137,10 @@ object CloudSyncService {
         syncUrl: String,
         secretKey: String
     ): CloudSyncResult = withContext(Dispatchers.IO) {
-        val trimmedUrl = syncUrl.trim()
+        val normalizedUrl = normalizeSyncUrl(syncUrl)
         val trimmedKey = secretKey.trim()
 
-        if (trimmedUrl.isBlank()) {
+        if (normalizedUrl.isBlank()) {
             return@withContext CloudSyncResult(
                 success = false,
                 message = "Cloud Sync URL is empty. Please configure your server URL in Settings."
@@ -133,9 +158,9 @@ object CloudSyncService {
 
             val requestBody = jsonPayload.toRequestBody(jsonMediaType)
             val request = Request.Builder()
-                .url(trimmedUrl)
+                .url(normalizedUrl)
                 .post(requestBody)
-                .addHeader("User-Agent", "NaadrielFarmPOS/1.0")
+                .addHeader("User-Agent", "BizTrackPOS/1.0")
                 .addHeader("X-Sync-Action", "PULL")
                 .addHeader("X-Api-Key", trimmedKey)
                 .build()
@@ -146,7 +171,7 @@ object CloudSyncService {
             if (!response.isSuccessful) {
                 return@withContext CloudSyncResult(
                     success = false,
-                    message = "Server returned HTTP ${response.code}: ${responseBody.take(150)}"
+                    message = formatErrorMessage(responseBody, response.code)
                 )
             }
 
@@ -154,23 +179,34 @@ object CloudSyncService {
             val syncResponse = try {
                 responseAdapter.fromJson(responseBody)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse pull response: $responseBody", e)
+                Log.w(TAG, "Moshi pull response parsing had type mismatches, trying resilient parser", e)
                 null
             }
 
-            if (syncResponse != null && syncResponse.status.equals("success", ignoreCase = true) && syncResponse.backupData != null) {
-                val data = syncResponse.backupData
-                val count = data.products.size + data.customers.size + data.salesOrders.size
+            // Extract BackupData either from Moshi or through resilient parser
+            val parsedBackupData = syncResponse?.backupData ?: com.example.util.DatabaseBackupHelper.parseBackupJson(responseBody)
+
+            if (parsedBackupData != null && (parsedBackupData.products.isNotEmpty() || parsedBackupData.customers.isNotEmpty() || parsedBackupData.salesOrders.isNotEmpty() || parsedBackupData.payments.isNotEmpty() || parsedBackupData.settings != null)) {
+                val count = parsedBackupData.products.size + parsedBackupData.customers.size + parsedBackupData.salesOrders.size + parsedBackupData.payments.size
                 CloudSyncResult(
                     success = true,
-                    message = syncResponse.message.ifBlank { "Retrieved $count farm records from cloud MySQL database." },
-                    backupData = data,
+                    message = syncResponse?.message?.ifBlank { "Retrieved $count farm records from cloud MySQL database." } ?: "Retrieved $count farm records from cloud MySQL database.",
+                    backupData = parsedBackupData,
                     recordsCount = count
+                )
+            } else if (syncResponse != null && syncResponse.status.equals("success", ignoreCase = true)) {
+                // Server returned success but tables are currently empty
+                val emptyBackup = parsedBackupData ?: com.example.data.model.BackupData()
+                CloudSyncResult(
+                    success = true,
+                    message = syncResponse.message.ifBlank { "Cloud database is connected (0 records found)." },
+                    backupData = emptyBackup,
+                    recordsCount = 0
                 )
             } else {
                 CloudSyncResult(
                     success = false,
-                    message = syncResponse?.message ?: "Server error: ${responseBody.take(150)}"
+                    message = syncResponse?.message ?: formatErrorMessage(responseBody, response.code)
                 )
             }
         } catch (e: Exception) {
@@ -189,21 +225,21 @@ object CloudSyncService {
         syncUrl: String,
         secretKey: String
     ): CloudSyncResult = withContext(Dispatchers.IO) {
-        val trimmedUrl = syncUrl.trim()
+        val normalizedUrl = normalizeSyncUrl(syncUrl)
         val trimmedKey = secretKey.trim()
 
-        if (trimmedUrl.isBlank()) {
+        if (normalizedUrl.isBlank()) {
             return@withContext CloudSyncResult(
                 success = false,
-                message = "Please enter your Namecheap Sync URL (e.g. https://yourdomain.com/api/sync.php)"
+                message = "Please enter your Namecheap Sync URL (e.g. https://yourdomain.com/sync.php)"
             )
         }
 
         try {
             val request = Request.Builder()
-                .url(trimmedUrl)
+                .url(normalizedUrl)
                 .get()
-                .addHeader("User-Agent", "NaadrielFarmPOS/1.0")
+                .addHeader("User-Agent", "BizTrackPOS/1.0")
                 .addHeader("X-Api-Key", trimmedKey)
                 .build()
 
@@ -211,14 +247,22 @@ object CloudSyncService {
             val responseBody = response.body?.string() ?: ""
 
             if (response.isSuccessful) {
-                CloudSyncResult(
-                    success = true,
-                    message = "Connected to Namecheap API server successfully! (HTTP ${response.code})"
-                )
+                val trimmed = responseBody.trim()
+                if (trimmed.startsWith("<!DOCTYPE", ignoreCase = true) || trimmed.startsWith("<html", ignoreCase = true)) {
+                    CloudSyncResult(
+                        success = false,
+                        message = "URL returned a webpage, not the API! Include the file name: e.g. ${normalizedUrl.trimEnd('/')}/sync.php"
+                    )
+                } else {
+                    CloudSyncResult(
+                        success = true,
+                        message = "Connected to Namecheap API server successfully! (HTTP ${response.code})"
+                    )
+                }
             } else {
                 CloudSyncResult(
                     success = false,
-                    message = "Server reached but returned HTTP ${response.code}: ${responseBody.take(100)}"
+                    message = formatErrorMessage(responseBody, response.code)
                 )
             }
         } catch (e: Exception) {

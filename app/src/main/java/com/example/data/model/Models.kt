@@ -129,13 +129,13 @@ data class PaymentEntity(
 data class AppSettingsEntity(
     @PrimaryKey
     val id: Int = 1,
-    val businessName: String = "Naadriel Enterprise",
-    val businessTagline: String = "Chicken at its best",
+    val businessName: String = "BizTrack Business",
+    val businessTagline: String = "Quality products & reliable service",
     val businessPhone: String = "024 000 0000",
     val businessLocation: String = "Ghana",
-    val momoPaymentDetails: String = "MTN MoMo: 0244XXXXXX (Naadriel Enterprise)",
+    val momoPaymentDetails: String = "MTN MoMo: 0244XXXXXX (BizTrack)",
     val smsApiKey: String = "",
-    val smsSenderId: String = "Naadriel",
+    val smsSenderId: String = "BizTrack",
     val smsAutoSendOnSale: Boolean = true,
     val smsAutoSendOnPayment: Boolean = true,
     val currencySymbol: String = "GH₵",

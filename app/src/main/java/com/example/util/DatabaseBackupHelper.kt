@@ -63,10 +63,10 @@ object DatabaseBackupHelper {
 
         BackupData(
             formatVersion = 1,
-            appName = "Naadriel Enterprise Farm POS",
+            appName = "BizTrack POS",
             exportedAt = now,
             exportedAtFormatted = dateFormatted,
-            businessName = settings?.businessName ?: "Naadriel Enterprise",
+            businessName = settings?.businessName ?: "BizTrack Business",
             settings = settings,
             products = products,
             customers = customers,
@@ -136,13 +136,217 @@ object DatabaseBackupHelper {
     }
 
     /**
-     * Parse backup JSON string safely.
+     * Parse backup JSON string safely with automatic resilient fallback.
      */
     fun parseBackupJson(jsonString: String): BackupData? {
-        return try {
-            backupAdapter.fromJson(jsonString)
+        val trimmed = jsonString.trim()
+        if (trimmed.isBlank()) return null
+
+        // 1. Try standard Moshi adapter
+        try {
+            val parsed = backupAdapter.fromJson(trimmed)
+            if (parsed != null && (parsed.products.isNotEmpty() || parsed.customers.isNotEmpty() || parsed.salesOrders.isNotEmpty() || parsed.settings != null)) {
+                return parsed
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing backup JSON", e)
+            Log.w(TAG, "Moshi parsing failed, falling back to resilient JSONObject parser", e)
+        }
+
+        // 2. Resilient fallback using org.json.JSONObject to survive type mismatches / nulls
+        return try {
+            val root = org.json.JSONObject(trimmed)
+            val dataObj = if (root.has("backupData") && !root.isNull("backupData")) {
+                root.getJSONObject("backupData")
+            } else {
+                root
+            }
+
+            val products = mutableListOf<ProductEntity>()
+            if (dataObj.has("products") && !dataObj.isNull("products")) {
+                val arr = dataObj.getJSONArray("products")
+                for (i in 0 until arr.length()) {
+                    val p = arr.getJSONObject(i)
+                    products.add(
+                        ProductEntity(
+                            id = p.optLong("id", 0L),
+                            name = p.optString("name", "Product"),
+                            category = p.optString("category", "OTHER"),
+                            unit = p.optString("unit", "unit"),
+                            unitPrice = if (p.has("unitPrice")) p.optDouble("unitPrice", 0.0) else p.optDouble("price", 0.0),
+                            costPrice = p.optDouble("costPrice", 0.0),
+                            stockQuantity = p.optDouble("stockQuantity", 0.0),
+                            minStockThreshold = p.optDouble("minStockThreshold", 5.0),
+                            inStock = p.optBoolean("inStock", p.optDouble("stockQuantity", 0.0) > 0),
+                            description = p.optString("description", ""),
+                            imageUri = p.optString("imageUri", ""),
+                            lastRestockedAt = p.optLong("lastRestockedAt", System.currentTimeMillis())
+                        )
+                    )
+                }
+            }
+
+            val customers = mutableListOf<CustomerEntity>()
+            if (dataObj.has("customers") && !dataObj.isNull("customers")) {
+                val arr = dataObj.getJSONArray("customers")
+                for (i in 0 until arr.length()) {
+                    val c = arr.getJSONObject(i)
+                    val debt = when {
+                        c.has("currentBalance") && !c.isNull("currentBalance") && c.optDouble("currentBalance", 0.0) > 0.001 -> c.optDouble("currentBalance", 0.0)
+                        c.has("totalDebt") && !c.isNull("totalDebt") && c.optDouble("totalDebt", 0.0) > 0.001 -> c.optDouble("totalDebt", 0.0)
+                        c.has("currentBalance") && !c.isNull("currentBalance") -> c.optDouble("currentBalance", 0.0)
+                        else -> c.optDouble("totalDebt", 0.0)
+                    }
+                    val purchases = when {
+                        c.has("totalPurchases") && !c.isNull("totalPurchases") && c.optDouble("totalPurchases", 0.0) > 0.001 -> c.optDouble("totalPurchases", 0.0)
+                        c.has("totalPurchased") && !c.isNull("totalPurchased") && c.optDouble("totalPurchased", 0.0) > 0.001 -> c.optDouble("totalPurchased", 0.0)
+                        c.has("totalPurchases") && !c.isNull("totalPurchases") -> c.optDouble("totalPurchases", 0.0)
+                        else -> c.optDouble("totalPurchased", 0.0)
+                    }
+                    customers.add(
+                        CustomerEntity(
+                            id = c.optLong("id", 0L),
+                            name = c.optString("name", "Customer"),
+                            phone = c.optString("phone", ""),
+                            whatsapp = c.optString("whatsapp", ""),
+                            address = c.optString("address", ""),
+                            notes = c.optString("notes", ""),
+                            totalPurchases = purchases,
+                            totalPaid = c.optDouble("totalPaid", 0.0),
+                            currentBalance = debt,
+                            createdAt = if (c.has("createdAt")) c.optLong("createdAt", System.currentTimeMillis()) else c.optLong("lastTransactionDate", System.currentTimeMillis())
+                        )
+                    )
+                }
+            }
+
+            val salesOrders = mutableListOf<SaleOrderEntity>()
+            if (dataObj.has("salesOrders") && !dataObj.isNull("salesOrders")) {
+                val arr = dataObj.getJSONArray("salesOrders")
+                for (i in 0 until arr.length()) {
+                    val s = arr.getJSONObject(i)
+                    val id = s.optLong("id", 0L)
+                    val rawLastSms = if (s.has("lastSmsTimestamp") && !s.isNull("lastSmsTimestamp")) s.optLong("lastSmsTimestamp") else null
+                    val balance = when {
+                        s.has("balanceDue") && !s.isNull("balanceDue") && s.optDouble("balanceDue", 0.0) > 0.001 -> s.optDouble("balanceDue", 0.0)
+                        s.has("debtAmount") && !s.isNull("debtAmount") && s.optDouble("debtAmount", 0.0) > 0.001 -> s.optDouble("debtAmount", 0.0)
+                        s.has("balanceDue") && !s.isNull("balanceDue") -> s.optDouble("balanceDue", 0.0)
+                        else -> s.optDouble("debtAmount", 0.0)
+                    }
+                    salesOrders.add(
+                        SaleOrderEntity(
+                            id = id,
+                            invoiceNumber = s.optString("invoiceNumber", "INV-$id"),
+                            customerId = s.optLong("customerId", 0L),
+                            customerName = s.optString("customerName", "Walk-in Customer"),
+                            customerPhone = s.optString("customerPhone", ""),
+                            customerWhatsapp = s.optString("customerWhatsapp", ""),
+                            itemsJson = s.optString("itemsJson", "[]"),
+                            totalAmount = s.optDouble("totalAmount", 0.0),
+                            discountAmount = s.optDouble("discountAmount", 0.0),
+                            amountPaid = s.optDouble("amountPaid", 0.0),
+                            balanceDue = balance,
+                            paymentStatus = s.optString("paymentStatus", "PAID"),
+                            paymentMethod = s.optString("paymentMethod", "CASH"),
+                            notes = s.optString("notes", ""),
+                            timestamp = s.optLong("timestamp", System.currentTimeMillis()),
+                            smsSentCount = s.optInt("smsSentCount", 0),
+                            lastSmsTimestamp = rawLastSms
+                        )
+                    )
+                }
+            }
+
+            val payments = mutableListOf<PaymentEntity>()
+            if (dataObj.has("payments") && !dataObj.isNull("payments")) {
+                val arr = dataObj.getJSONArray("payments")
+                for (i in 0 until arr.length()) {
+                    val pm = arr.getJSONObject(i)
+                    val saleOrderId = if (pm.has("saleOrderId") && !pm.isNull("saleOrderId")) pm.optLong("saleOrderId") else null
+                    payments.add(
+                        PaymentEntity(
+                            id = pm.optLong("id", 0L),
+                            customerId = pm.optLong("customerId", 0L),
+                            customerName = pm.optString("customerName", ""),
+                            saleOrderId = saleOrderId,
+                            amount = pm.optDouble("amount", 0.0),
+                            paymentMethod = pm.optString("paymentMethod", "CASH"),
+                            notes = pm.optString("notes", ""),
+                            timestamp = pm.optLong("timestamp", System.currentTimeMillis()),
+                            balanceAfterPayment = pm.optDouble("balanceAfterPayment", 0.0)
+                        )
+                    )
+                }
+            }
+
+            val logs = mutableListOf<InventoryLogEntity>()
+            if (dataObj.has("inventoryLogs") && !dataObj.isNull("inventoryLogs")) {
+                val arr = dataObj.getJSONArray("inventoryLogs")
+                for (i in 0 until arr.length()) {
+                    val l = arr.getJSONObject(i)
+                    logs.add(
+                        InventoryLogEntity(
+                            id = l.optLong("id", 0L),
+                            productId = l.optLong("productId", 0L),
+                            productName = l.optString("productName", ""),
+                            changeType = l.optString("changeType", "ADJUSTMENT"),
+                            quantityChanged = l.optDouble("quantityChanged", 0.0),
+                            quantityAfter = l.optDouble("quantityAfter", 0.0),
+                            unit = l.optString("unit", "unit"),
+                            notes = l.optString("notes", ""),
+                            timestamp = l.optLong("timestamp", System.currentTimeMillis())
+                        )
+                    )
+                }
+            }
+
+            val settingsEntity = if (dataObj.has("settings") && !dataObj.isNull("settings")) {
+                val st = dataObj.getJSONObject("settings")
+                AppSettingsEntity(
+                    id = st.optInt("id", 1),
+                    businessName = st.optString("businessName", "BizTrack Business"),
+                    businessTagline = st.optString("businessTagline", "Quality products & reliable service"),
+                    businessPhone = st.optString("businessPhone", "024 000 0000"),
+                    businessLocation = st.optString("businessLocation", "Ghana"),
+                    momoPaymentDetails = st.optString("momoPaymentDetails", ""),
+                    smsApiKey = st.optString("smsApiKey", ""),
+                    smsSenderId = st.optString("smsSenderId", "BizTrack"),
+                    smsAutoSendOnSale = st.optBoolean("smsAutoSendOnSale", true),
+                    smsAutoSendOnPayment = st.optBoolean("smsAutoSendOnPayment", true),
+                    currencySymbol = st.optString("currencySymbol", "GH₵"),
+                    cloudSyncUrl = st.optString("cloudSyncUrl", ""),
+                    cloudSyncSecretKey = st.optString("cloudSyncSecretKey", ""),
+                    cloudAutoSyncOnSale = st.optBoolean("cloudAutoSyncOnSale", false),
+                    lastCloudSyncTime = st.optLong("lastCloudSyncTime", 0L),
+                    lastCloudSyncStatus = st.optString("lastCloudSyncStatus", "Synced")
+                )
+            } else {
+                null
+            }
+
+            BackupData(
+                formatVersion = dataObj.optInt("formatVersion", 1),
+                appName = dataObj.optString("appName", "BizTrack POS"),
+                exportedAt = dataObj.optLong("exportedAt", System.currentTimeMillis()),
+                exportedAtFormatted = dataObj.optString("exportedAtFormatted", ""),
+                businessName = dataObj.optString("businessName", "BizTrack Business"),
+                settings = settingsEntity,
+                products = products,
+                customers = customers,
+                salesOrders = salesOrders,
+                payments = payments,
+                inventoryLogs = logs,
+                summary = BackupSummary(
+                    totalProducts = products.size,
+                    totalCustomers = customers.size,
+                    totalSalesOrders = salesOrders.size,
+                    totalPayments = payments.size,
+                    totalInventoryLogs = logs.size,
+                    totalOutstandingDebt = customers.sumOf { it.currentBalance },
+                    totalRevenue = salesOrders.sumOf { it.totalAmount }
+                )
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Resilient parser also failed on JSON", e)
             null
         }
     }
@@ -156,9 +360,20 @@ object DatabaseBackupHelper {
     ): RestoreResult = withContext(Dispatchers.IO) {
         try {
             database.withTransaction {
-                // 1. Settings
-                backupData.settings?.let { settings ->
-                    database.appSettingsDao().saveSettings(settings)
+                // 1. Settings (Safely merge existing phone cloud/SMS config)
+                backupData.settings?.let { newSettings ->
+                    val existing = database.appSettingsDao().getSettingsDirect()
+                    val merged = if (existing != null) {
+                        newSettings.copy(
+                            cloudSyncUrl = newSettings.cloudSyncUrl.ifBlank { existing.cloudSyncUrl },
+                            cloudSyncSecretKey = newSettings.cloudSyncSecretKey.ifBlank { existing.cloudSyncSecretKey },
+                            smsApiKey = newSettings.smsApiKey.ifBlank { existing.smsApiKey },
+                            smsSenderId = newSettings.smsSenderId.ifBlank { existing.smsSenderId }
+                        )
+                    } else {
+                        newSettings
+                    }
+                    database.appSettingsDao().saveSettings(merged)
                 }
 
                 // 2. Products
@@ -174,6 +389,33 @@ object DatabaseBackupHelper {
                 // 4. Sales Orders
                 if (backupData.salesOrders.isNotEmpty()) {
                     database.saleOrderDao().insertAll(backupData.salesOrders)
+
+                    // Reconcile debtors: Ensure any customer who has unpaid orders (balanceDue > 0) has their customer record created and currentBalance updated
+                    val allCustomersMap = database.customerDao().getAllCustomersDirect().associateBy { it.id }.toMutableMap()
+                    for (order in backupData.salesOrders) {
+                        if (order.balanceDue > 0.009) {
+                            val existingCustomer = allCustomersMap[order.customerId]
+                            if (existingCustomer == null && order.customerId > 0) {
+                                val newCust = CustomerEntity(
+                                    id = order.customerId,
+                                    name = order.customerName.ifBlank { "Debtor #${order.customerId}" },
+                                    phone = order.customerPhone,
+                                    whatsapp = order.customerWhatsapp,
+                                    notes = "Restored from Invoice #${order.invoiceNumber}",
+                                    totalPurchases = order.totalAmount,
+                                    totalPaid = order.amountPaid,
+                                    currentBalance = order.balanceDue,
+                                    createdAt = order.timestamp
+                                )
+                                database.customerDao().insertCustomer(newCust)
+                                allCustomersMap[newCust.id] = newCust
+                            } else if (existingCustomer != null && existingCustomer.currentBalance < order.balanceDue) {
+                                val updated = existingCustomer.copy(currentBalance = order.balanceDue)
+                                database.customerDao().updateCustomer(updated)
+                                allCustomersMap[updated.id] = updated
+                            }
+                        }
+                    }
                 }
 
                 // 5. Payments
@@ -229,7 +471,7 @@ object DatabaseBackupHelper {
             val backupData = parseBackupJson(jsonString)
                 ?: return@withContext RestoreResult(
                     success = false,
-                    message = "Invalid backup format. Ensure the selected file is a valid JSON backup exported from Naadriel Farm."
+                    message = "Invalid backup format. Ensure the selected file is a valid JSON backup exported from BizTrack."
                 )
 
             restoreDatabase(database, backupData)
@@ -330,10 +572,10 @@ object DatabaseBackupHelper {
         return Intent(Intent.ACTION_SEND).apply {
             type = "application/json"
             putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "Naadriel Farm Database Backup (${backupFile.name})")
+            putExtra(Intent.EXTRA_SUBJECT, "BizTrack Database Backup (${backupFile.name})")
             putExtra(
                 Intent.EXTRA_TEXT,
-                "Here is the local database backup for Naadriel Enterprise Farm POS. You can restore this file anytime in the app's Settings screen."
+                "Here is the local database backup for BizTrack POS. You can restore this file anytime in the app's Settings screen."
             )
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }

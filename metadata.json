@@ -1,6 +1,6 @@
 {
-  "name": "Naadriel Enterprise",
-  "description": "Poultry and farm sales manager with SMSOnlineGH notifications, WhatsApp receipts, and customer debt tracking for eggs, live and dressed chicken.",
+  "name": "BizTrack",
+  "description": "All-in-one Business POS, Sales & Inventory Tracker, Customer Debt Manager with SMS/WhatsApp notifications, analytics, and multi-device cloud sync.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
